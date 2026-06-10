@@ -8,6 +8,7 @@
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "vector";
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- ============================================================
 -- CUSTOM TYPES (ENUMs)
@@ -280,7 +281,7 @@ CREATE TABLE IF NOT EXISTS law_chunks (
     content TEXT NOT NULL,
     parent_context TEXT,
     embedding vector,
-    domains TEXT[],
+    domains legal_domain[],
     keywords TEXT[],
     created_at TIMESTAMPTZ DEFAULT now(),
     tsv TSVECTOR,
@@ -299,7 +300,7 @@ CREATE TABLE IF NOT EXISTS law_documents (
     effective_date DATE,
     expiry_date DATE,
     status law_status DEFAULT 'active'::law_status,
-    domains TEXT[] NOT NULL,
+    domains legal_domain[] NOT NULL,
     replaces TEXT[],
     amended_by TEXT[],
     full_text TEXT,
