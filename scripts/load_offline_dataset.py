@@ -9,7 +9,9 @@ Run on the HOST against the docker-compose Postgres (see README / spec §5.3):
     export DB_USER=${POSTGRES_USER:-legalai}
     export SUPABASE_DB_PASSWORD=${POSTGRES_PASSWORD:-legalai2026}
     export DB_SSL_MODE=disable
-    python scripts/load_offline_dataset.py --truncate
+    # Run as a MODULE from the repo root (the `from scripts import ...` import
+    # only resolves this way — running the file by path raises ModuleNotFoundError):
+    python3 -m scripts.load_offline_dataset --truncate --skip-legacy
 """
 from __future__ import annotations
 
@@ -83,6 +85,13 @@ def reconcile_schema(conn) -> None:
     and the canonical search_law() function (spec §4a). Idempotent."""
     with conn.cursor() as cur:
         cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+        # Ensure the admin-law label exists (review #4) so the live search path
+        # (main.py:detect_domain emits 'hanh_chinh') doesn't 500 on the
+        # ::legal_domain[] cast. Commit it before any use — a new enum value
+        # cannot be used in the same transaction it was added in.
+        cur.execute("ALTER TYPE legal_domain ADD VALUE IF NOT EXISTS 'hanh_chinh';")
+    conn.commit()
+    with conn.cursor() as cur:
         for table in ("law_documents", "law_chunks"):
             cur.execute(
                 "SELECT udt_name FROM information_schema.columns "
@@ -290,6 +299,11 @@ def load_legacy(conn, snap: str, seen_numbers: set[str], limit: int | None) -> N
         print("[load] no legacy config found; skipping")
         return
 
+    # legacy/content.parquet is ~10GB uncompressed in a SINGLE row group, so the
+    # read below materializes it whole — needs ~20GB+ RAM (review #2). Skip with
+    # --skip-legacy on memory-constrained machines.
+    print("[load] WARNING: loading legacy content (~10GB uncompressed, single row "
+          "group) — needs ~20GB+ RAM. Use --skip-legacy if this OOMs.")
     meta_by_id = {r["id"]: r for r in pq.read_table(meta_path).to_pylist()}
     content_by_id = _group_legacy_content(content_path)
     print(f"[load] legacy metadata={len(meta_by_id)} content={len(content_by_id)}")

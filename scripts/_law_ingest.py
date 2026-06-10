@@ -74,12 +74,12 @@ def chunk_document(text: str, chunk_size: int = 1500, overlap: int = 200) -> lis
     return chunks
 
 
-# The 12 legal_domain enum labels (database/init.sql). NOTE: `hanh_chinh` is
-# intentionally absent — src/api/main.py:detect_domain emits it and it is NOT a
-# legal_domain member, so we must never reuse that function here (review #2).
+# The 13 legal_domain enum labels (database/init.sql). `hanh_chinh` was added to
+# the enum so the live search path (src/api/main.py:detect_domain emits it for
+# administrative-law queries) no longer 500s on the ::legal_domain[] cast (review #4).
 VALID_DOMAINS = frozenset({
     "lao_dong", "doanh_nghiep", "dan_su", "thuong_mai", "thue", "dat_dai",
-    "dau_tu", "bhxh", "atvs_ld", "so_huu_tri_tue", "hinh_su", "other",
+    "dau_tu", "bhxh", "atvs_ld", "so_huu_tri_tue", "hinh_su", "hanh_chinh", "other",
 })
 
 # Ported verbatim from the enum-safe scripts/load_law_data.py:detect_domains.
@@ -95,6 +95,7 @@ _DOMAIN_KEYWORDS = {
     "atvs_ld": ["an toàn", "vệ sinh lao động", "tai nạn lao động", "bệnh nghề nghiệp"],
     "so_huu_tri_tue": ["sở hữu trí tuệ", "bản quyền", "sáng chế", "nhãn hiệu"],
     "hinh_su": ["hình sự", "tội phạm", "hình phạt", "truy cứu"],
+    "hanh_chinh": ["vi phạm hành chính", "phạt hành chính", "khiếu nại", "tố cáo"],
 }
 
 

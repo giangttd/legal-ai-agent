@@ -62,9 +62,16 @@ def test_detect_domains_only_valid_enum_values():
     assert set(out) <= VALID_DOMAINS
 
 
-def test_valid_domains_has_twelve_labels():
-    assert len(VALID_DOMAINS) == 12
-    assert "hanh_chinh" not in VALID_DOMAINS  # the main.py bug must not leak in
+def test_valid_domains_labels():
+    assert len(VALID_DOMAINS) == 13
+    # hanh_chinh is now a real legal_domain enum member (review #4) so the live
+    # search path's admin-law queries no longer fail the ::legal_domain[] cast.
+    assert "hanh_chinh" in VALID_DOMAINS
+
+
+def test_detect_domains_admin_law():
+    out = detect_domains("Nghị định xử phạt vi phạm hành chính", "mức phạt hành chính")
+    assert out == ["hanh_chinh"]
 
 
 from datetime import date

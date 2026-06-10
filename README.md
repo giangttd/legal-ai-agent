@@ -359,16 +359,28 @@ export DB_NAME=${POSTGRES_DB:-legalai}
 export DB_USER=${POSTGRES_USER:-legalai}
 export SUPABASE_DB_PASSWORD=${POSTGRES_PASSWORD:-legalai2026}
 export DB_SSL_MODE=disable
-python scripts/load_offline_dataset.py --truncate
+# Run as a MODULE from the repo root (running the file by path fails with
+# ModuleNotFoundError). --skip-legacy is recommended (see RAM note below).
+python3 -m scripts.load_offline_dataset --truncate --skip-legacy
 ```
 
 > The loader auto-reconciles the schema it needs (`pg_trgm`, `domains legal_domain[]`,
-> and the `search_law()` function from `scripts/migration_search_v5_fixed.sql`), then
-> loads the bundled HuggingFace dataset (`data/datasets-legal-docs/`) — both the
-> `current` (HTML, rich metadata) and `legacy` (broader coverage) configs, merged and
-> deduplicated. Use `--limit N --skip-relations` to validate on a subset first, or
-> `--skip-legacy` for a faster current-only corpus. The CrawlKit crawler remains
-> available for ad-hoc top-ups but is no longer required.
+> the `hanh_chinh` enum value, and the `search_law()` function from
+> `scripts/migration_search_v5_fixed.sql`), then loads the bundled HuggingFace dataset
+> (`data/datasets-legal-docs/`). The `current` config (HTML, rich metadata, ~149K docs)
+> loads comfortably. Use `--limit N --skip-relations` to validate on a subset first.
+>
+> **⚠️ `--truncate` is destructive-first:** it empties `law_documents`/`law_chunks`/`law_relations`
+> before loading, then commits in phases. If a run fails partway, the prior corpus is
+> already gone and the DB is left empty/partial — just re-run the same command (it is
+> idempotent) once the cause is fixed.
+>
+> **⚠️ Full legacy load needs ~20GB+ RAM.** Dropping `--skip-legacy` also ingests the
+> `legacy` config (518K docs), whose content parquet is ~10GB uncompressed in a single
+> row group and is read whole into memory. Only do this on a machine with enough RAM:
+> `python3 -m scripts.load_offline_dataset --truncate`.
+>
+> The CrawlKit crawler remains available for ad-hoc top-ups but is no longer required.
 
 ### 4. Run
 
