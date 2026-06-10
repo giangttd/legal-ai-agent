@@ -345,6 +345,76 @@ def load_legacy(conn, snap: str, seen_numbers: set[str], limit: int | None) -> N
     print(f"[load] legacy done: {loaded} docs ({skipped_dup} dup-skipped)")
 
 
+def load_relationships(conn, snap: str, id_map: dict[int, str]) -> None:
+    """Insert edges where BOTH endpoints resolved to a current-config UUID.
+    Legacy ids never enter id_map, so there is no cross-space collision."""
+    rel_path = os.path.join(snap, "data", "relationships.parquet")
+    table = pq.read_table(rel_path)
+    doc_ids = table.column("doc_id").to_pylist()
+    other_ids = table.column("other_doc_id").to_pylist()
+    rels = table.column("relationship").to_pylist()
+
+    rows: list[tuple] = []
+    inserted = skipped = 0
+    cur = conn.cursor()
+    for d, o, rel in zip(doc_ids, other_ids, rels):
+        s = id_map.get(d)
+        t = id_map.get(o)
+        if not s or not t:
+            skipped += 1
+            continue
+        rows.append((s, t, rel))
+        if len(rows) >= 5000:
+            execute_values(
+                cur,
+                "INSERT INTO law_relations (source_law_id, target_law_id, relation_type) VALUES %s",
+                rows, page_size=1000)
+            conn.commit()
+            inserted += len(rows); rows.clear()
+    if rows:
+        execute_values(
+            cur,
+            "INSERT INTO law_relations (source_law_id, target_law_id, relation_type) VALUES %s",
+            rows, page_size=1000)
+        conn.commit()
+        inserted += len(rows)
+    cur.close()
+    print(f"[load] relationships: {inserted} inserted, {skipped} dangling-skipped")
+
+
+def verify(conn, limit: int | None, skip_relations: bool) -> None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM law_documents")
+        docs = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM law_chunks")
+        chunks = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM law_relations")
+        rels = cur.fetchone()[0]
+        print(f"[verify] docs={docs} chunks={chunks} relations={rels}")
+        assert docs > 0 and chunks > 0, "no docs/chunks loaded"
+
+        # Schema-agnostic tsv sanity — proves tsv populated, no search_law() needed.
+        cur.execute(
+            "SELECT count(*) FROM law_chunks WHERE tsv @@ to_tsquery('simple', %s)",
+            ("lao & động",))
+        tsv_hits = cur.fetchone()[0]
+        print(f"[verify] tsv 'lao động' hits: {tsv_hits}")
+        assert tsv_hits > 0, "tsv populated but no keyword match — check to_tsvector"
+
+        # End-to-end via the live search_law() (deployed in Phase 0).
+        cur.execute("SELECT count(*) FROM search_law(%s, NULL, %s)",
+                    ("hợp đồng lao động", 10))
+        sl_hits = cur.fetchone()[0]
+        print(f"[verify] search_law('hợp đồng lao động') rows: {sl_hits}")
+        assert sl_hits > 0, "search_law returned nothing"
+
+        if not skip_relations and limit is None:
+            assert rels > 0, "expected relationships on a full run"
+        else:
+            print("[verify] relationship-count assertion skipped (--limit/--skip-relations)")
+    print("[verify] OK")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     cfg = build_db_config()
@@ -366,11 +436,10 @@ def main(argv: list[str] | None = None) -> int:
         id_map, seen = load_current(conn, snap, args.limit)
         if not args.skip_legacy:
             load_legacy(conn, snap, seen, args.limit)
-        # --- Phase 3 + finalize (Task 11): uncomment ---
-        # if not args.skip_relations:
-        #     load_relationships(conn, snap, id_map)
-        # recreate_indexes(conn)
-        # verify(conn, args.limit, args.skip_relations)
+        if not args.skip_relations:
+            load_relationships(conn, snap, id_map)
+        recreate_indexes(conn)          # Phase 4 step 1 (success path)
+        verify(conn, args.limit, args.skip_relations)  # Phase 4 step 3
     except Exception:
         conn.rollback()  # clear any aborted-transaction state before re-raising
         raise
