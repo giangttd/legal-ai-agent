@@ -4901,9 +4901,13 @@ console.log(await resp.json());</code></pre>
                 oauthButtons.style.display = 'none';
             } else if (provider === 'openai') {
                 modelSelect.innerHTML = `
-                    <option value="gpt-4-turbo-preview">GPT-4 Turbo</option>
-                    <option value="gpt-4">GPT-4</option>
-                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                    <option value="gpt-5.5">GPT-5.5</option>
+                    <option value="gpt-5.4">GPT-5.4</option>
+                    <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+                    <option value="gpt-4.1">GPT-4.1</option>
+                    <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+                    <option value="gpt-4o">GPT-4o</option>
+                    <option value="gpt-4o-mini">GPT-4o Mini</option>
                 `;
                 oauthButtons.style.display = 'block';
             } else if (provider === 'google') {
