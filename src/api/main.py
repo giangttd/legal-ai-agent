@@ -1845,6 +1845,47 @@ async def search(q: str, domains: Optional[str] = None, limit: int = 10, company
         } for r in results]
     }
 
+
+# Valid legal_domain enum members (database/init.sql). The web UI's filter pills
+# send law_type values (luat/nghi_dinh/thong_tu), which are NOT legal_domain and
+# would error on the ::legal_domain[] cast — drop any non-domain filter value.
+_LEGAL_DOMAIN_VALUES = frozenset({
+    "lao_dong", "doanh_nghiep", "dan_su", "thuong_mai", "thue", "dat_dai",
+    "dau_tu", "bhxh", "atvs_ld", "so_huu_tri_tue", "hinh_su", "hanh_chinh", "other",
+})
+
+
+class LawSearchBody(BaseModel):
+    query: str
+    domain: Optional[str] = None
+    domains: Optional[List[str]] = None
+    limit: int = 20
+
+
+@app.post("/v1/legal/search")
+async def search_post(body: LawSearchBody, company: dict = Depends(verify_api_key)):
+    """Law search (POST) — used by the web UI. Mirrors GET /v1/legal/search.
+
+    The UI sends `Authorization: Bearer <token>` + a JSON body `{query, domain?, limit}`;
+    the GET variant only accepted query params, so the UI's POST got 405.
+    """
+    raw = body.domains or ([body.domain] if body.domain else [])
+    # keep only valid legal_domain filter values; ignore law-type filter pills.
+    domain_list = [d for d in raw if d in _LEGAL_DOMAIN_VALUES] or None
+    results = cached_search(body.query, domain_list, min(body.limit, 30))
+    return {
+        "query": body.query,
+        "count": len(results),
+        "total": len(results),
+        "results": [{
+            "law_title": r["law_title"],
+            "law_number": r["law_number"],
+            "article": r.get("article"),
+            "content": r["content"][:500],
+            "rank": float(r.get("rank", 0)),
+        } for r in results],
+    }
+
 # ============================================
 # Admin endpoints (internal)
 # ============================================
