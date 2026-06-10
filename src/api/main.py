@@ -780,10 +780,13 @@ def multi_query_search(question: str, domains: Optional[List[str]] = None, limit
                 SELECT lc.id as chunk_id, lc.law_id, ld.title as law_title, 
                        ld.law_number, lc.article, lc.title as chunk_title,
                        lc.content, lc.domains, 1.0::float as rank
-                FROM law_chunks lc
+                FROM (
+                    SELECT * FROM law_chunks lc
+                    WHERE lc.content ILIKE %s {domain_filter}
+                    LIMIT 800
+                ) lc
                 JOIN law_documents ld ON ld.id = lc.law_id
-                WHERE lc.content ILIKE %s {domain_filter}
-                ORDER BY 
+                ORDER BY
                     CASE WHEN ld.title LIKE 'Bo Luat%%' OR ld.title LIKE 'Bộ luật%%' THEN 0
                          WHEN ld.title LIKE 'Luat %%' OR ld.title LIKE 'Luật %%' THEN 1
                          WHEN ld.title LIKE 'Nghi dinh%%' OR ld.title LIKE 'Nghị định%%' THEN 2
@@ -820,10 +823,13 @@ def multi_query_search(question: str, domains: Optional[List[str]] = None, limit
                     SELECT lc.id as chunk_id, lc.law_id, ld.title as law_title, 
                            ld.law_number, lc.article, lc.title as chunk_title,
                            lc.content, lc.domains, 1.2::float as rank
-                    FROM law_chunks lc
+                    FROM (
+                        SELECT * FROM law_chunks lc
+                        WHERE lc.content ILIKE %s {domain_filter}
+                        LIMIT 800
+                    ) lc
                     JOIN law_documents ld ON ld.id = lc.law_id
-                    WHERE lc.content ILIKE %s {domain_filter}
-                    ORDER BY 
+                    ORDER BY
                         CASE WHEN ld.title LIKE 'Bo Luat%%' OR ld.title LIKE 'Bộ luật%%' THEN 0
                              WHEN ld.title LIKE 'Luat %%' OR ld.title LIKE 'Luật %%' THEN 1
                              WHEN ld.title LIKE 'Nghi dinh%%' OR ld.title LIKE 'Nghị định%%' THEN 2
@@ -849,9 +855,12 @@ def multi_query_search(question: str, domains: Optional[List[str]] = None, limit
                     SELECT lc.id as chunk_id, lc.law_id, ld.title as law_title, 
                            ld.law_number, lc.article, lc.title as chunk_title,
                            lc.content, lc.domains, 1.0::float as rank
-                    FROM law_chunks lc
+                    FROM (
+                        SELECT * FROM law_chunks lc
+                        WHERE lc.content ILIKE %s {domain_filter}
+                        LIMIT 800
+                    ) lc
                     JOIN law_documents ld ON ld.id = lc.law_id
-                    WHERE lc.content ILIKE %s {domain_filter}
                     ORDER BY CASE WHEN ld.title LIKE 'Bo Luat%%' THEN 0 WHEN ld.title LIKE 'Luat%%' THEN 1 ELSE 2 END
                     LIMIT {limit}
                 """, params)
