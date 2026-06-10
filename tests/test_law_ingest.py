@@ -18,3 +18,28 @@ def test_clean_html_strips_tags_and_scripts():
 def test_clean_html_empty():
     assert clean_html("") == ""
     assert clean_html(None) == ""
+
+
+from scripts._law_ingest import chunk_document, simple_chunk
+
+
+def test_simple_chunk_overlap_and_min_length():
+    text = "x" * 4000
+    chunks = simple_chunk(text, size=1500, overlap=200)
+    assert len(chunks) >= 2
+    assert all(len(c) > 50 for c in chunks)
+
+
+def test_chunk_document_splits_by_article():
+    text = "\n".join(f"Điều {i}. Tiêu đề {i}\nNội dung điều {i}." for i in range(1, 6))
+    chunks = chunk_document(text)
+    assert len(chunks) == 5
+    assert chunks[0]["article"] == "Điều 1"
+    assert "Nội dung điều 1." in chunks[0]["content"]
+
+
+def test_chunk_document_no_articles_falls_back():
+    text = "Một đoạn văn bản dài không có điều khoản. " * 60
+    chunks = chunk_document(text)
+    assert len(chunks) >= 1
+    assert chunks[0]["article"] is None
