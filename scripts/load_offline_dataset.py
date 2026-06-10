@@ -140,6 +140,130 @@ def assert_empty_or_die(conn) -> None:
             f"law_documents has {n} rows. Re-run with --truncate to overwrite.")
 
 
+_DOC_COLS = ("id", "title", "law_number", "law_type", "issuer", "signer",
+             "issued_date", "effective_date", "expiry_date", "status",
+             "domains", "full_text", "source_site", "source_url",
+             "article_count", "word_count")
+
+# Trailing two %s (title, full_text) feed the tsv expression (review #6 coalesce).
+_DOC_TEMPLATE = ("(" + ",".join(["%s"] * len(_DOC_COLS)) +
+                 ", to_tsvector('simple', coalesce(%s,'') || ' ' || coalesce(%s,'')))")
+
+_CHUNK_COLS = ("law_id", "article", "clause", "title", "content", "domains")
+_CHUNK_TEMPLATE = ("(" + ",".join(["%s"] * len(_CHUNK_COLS)) +
+                   ", to_tsvector('simple', %s))")  # trailing %s = content
+
+
+def _flush_docs(cur, rows: list[tuple]) -> None:
+    if not rows:
+        return
+    execute_values(
+        cur,
+        f"INSERT INTO law_documents ({','.join(_DOC_COLS)}, tsv) VALUES %s",
+        rows, template=_DOC_TEMPLATE, page_size=1000)
+
+
+def _flush_chunks(cur, rows: list[tuple]) -> None:
+    if not rows:
+        return
+    execute_values(
+        cur,
+        f"INSERT INTO law_chunks ({','.join(_CHUNK_COLS)}, tsv) VALUES %s",
+        rows, template=_CHUNK_TEMPLATE, page_size=1000)
+
+
+def _group_content_by_id(content_path: str) -> dict[int, str]:
+    """Group content rows by int(id), dedup byte-identical fragments, concat in
+    file row order (review #8). content.id is a numeric string."""
+    table = pq.read_table(content_path, columns=["id", "content_html"])
+    ids = table.column("id").to_pylist()
+    htmls = table.column("content_html").to_pylist()
+    grouped: dict[int, list[str]] = {}
+    for raw_id, html in zip(ids, htmls):
+        if raw_id is None or not str(raw_id).strip().lstrip("-").isdigit():
+            continue
+        key = int(raw_id)
+        frag = html or ""
+        bucket = grouped.setdefault(key, [])
+        if frag and frag not in bucket:  # dedup exact-duplicate fragments
+            bucket.append(frag)
+    return {k: "\n".join(v) for k, v in grouped.items()}
+
+
+def load_current(conn, snap: str, limit: int | None):
+    """Load the current config. Returns (id_map: dict[int,uuid], seen_numbers: set)."""
+    meta_path = os.path.join(snap, "data", "metadata.parquet")
+    content_path = os.path.join(snap, "data", "content.parquet")
+
+    meta_tbl = pq.read_table(meta_path)
+    meta_by_id = {r["id"]: r for r in meta_tbl.to_pylist()}
+    print(f"[load] current metadata rows: {len(meta_by_id)}")
+
+    content_by_id = _group_content_by_id(content_path)
+    print(f"[load] current unique content docs: {len(content_by_id)}")
+
+    id_map: dict[int, str] = {}
+    seen_numbers: set[str] = set()
+    doc_rows: list[tuple] = []
+    chunk_rows: list[tuple] = []
+    loaded = 0
+
+    cur = conn.cursor()
+    for int_id, html in content_by_id.items():
+        if limit is not None and loaded >= limit:
+            break
+        text = ing.clean_html(html)
+        if len(text) < MIN_CONTENT_CHARS:
+            continue
+        meta = meta_by_id.get(int_id)
+        doc_uuid = str(uuid.uuid4())
+        if meta:
+            title = (meta.get("title") or "").strip() or f"Văn bản VBPL-{int_id}"
+            law_number = (meta.get("so_ky_hieu") or "").strip() or f"VBPL-{int_id}"
+            law_type = ing.map_law_type_vi(meta.get("loai_van_ban"))
+            issuer = (meta.get("co_quan_ban_hanh") or "").strip() or "Chưa xác định"
+            signer = meta.get("nguoi_ky")
+            issued = ing.parse_date_vi(meta.get("ngay_ban_hanh"))
+            effective = ing.parse_date_vi(meta.get("ngay_co_hieu_luc"))
+            expiry = ing.parse_date_vi(meta.get("ngay_het_hieu_luc"))
+            status = ing.map_status_vi(meta.get("tinh_trang_hieu_luc"))
+        else:
+            # content-only stub: title is NOT NULL (review #4)
+            first_line = next((ln for ln in text.splitlines() if ln.strip()), "")
+            title = first_line[:300] or f"Văn bản VBPL-{int_id}"
+            law_number = f"VBPL-{int_id}"
+            law_type, issuer, signer = "other", "Chưa xác định", None
+            issued = effective = expiry = None
+            status = "active"
+        domains = ing.detect_domains(title, text)
+
+        id_map[int_id] = doc_uuid
+        seen_numbers.add(ing.normalize_doc_number(law_number))
+        article_count = ing.count_articles(text)
+        doc_rows.append((
+            doc_uuid, title, law_number, law_type, issuer, signer,
+            issued, effective, expiry, status, domains, text,
+            SOURCE_SITE, f"https://vbpl.vn/Pages/vbpq-toanvan.aspx?ItemID={int_id}",
+            article_count, len(text.split()),
+            title, text,  # tsv operands
+        ))
+        for ch in ing.chunk_document(text):
+            chunk_rows.append((
+                doc_uuid, ch["article"], ch["clause"], ch["title"],
+                ch["content"], domains, ch["content"],  # last = tsv operand
+            ))
+        loaded += 1
+        if loaded % COMMIT_EVERY == 0:
+            _flush_docs(cur, doc_rows); _flush_chunks(cur, chunk_rows)
+            conn.commit(); doc_rows.clear(); chunk_rows.clear()
+            print(f"[load] current progress: {loaded} docs")
+
+    _flush_docs(cur, doc_rows); _flush_chunks(cur, chunk_rows)
+    conn.commit(); cur.close()
+    print(f"[load] current done: {loaded} docs")
+    return id_map, seen_numbers
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     cfg = build_db_config()
@@ -158,8 +282,7 @@ def main(argv: list[str] | None = None) -> int:
             assert_empty_or_die(conn)
         reconcile_schema(conn)   # ALTER domains, pg_trgm, deploy search_law() + indexes
         drop_tsv_indexes(conn)   # drop the tsv GIN the migration just created, for bulk speed
-        # --- Phase 1 (Task 9): uncomment ---
-        # id_map, seen = load_current(conn, snap, args.limit)
+        id_map, seen = load_current(conn, snap, args.limit)
         # --- Phase 2 (Task 10): uncomment ---
         # if not args.skip_legacy:
         #     load_legacy(conn, snap, seen, args.limit)
