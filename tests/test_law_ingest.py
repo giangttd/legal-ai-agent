@@ -65,3 +65,65 @@ def test_detect_domains_only_valid_enum_values():
 def test_valid_domains_has_twelve_labels():
     assert len(VALID_DOMAINS) == 12
     assert "hanh_chinh" not in VALID_DOMAINS  # the main.py bug must not leak in
+
+
+from datetime import date
+
+from scripts._law_ingest import (
+    map_law_type_legacy,
+    map_law_type_vi,
+    map_status_legacy,
+    map_status_vi,
+    normalize_doc_number,
+    parse_date_vi,
+)
+
+
+def test_map_law_type_vi():
+    assert map_law_type_vi("Quyết định") == "quyet_dinh"
+    assert map_law_type_vi("Thông tư liên tịch") == "thong_tu"
+    assert map_law_type_vi("Hiến pháp") == "hien_phap"
+    assert map_law_type_vi("Chỉ thị") == "other"
+    assert map_law_type_vi(None) == "other"
+
+
+def test_map_law_type_legacy():
+    assert map_law_type_legacy("Decision") == "quyet_dinh"
+    assert map_law_type_legacy("Official Dispatch") == "cong_van"
+    assert map_law_type_legacy("Circular") == "thong_tu"
+    assert map_law_type_legacy("Kế hoạch") == "other"
+
+
+def test_map_status_vi():
+    assert map_status_vi("Còn hiệu lực") == "active"
+    assert map_status_vi("Hết hiệu lực toàn bộ") == "expired"
+    assert map_status_vi("Hết hiệu lực một phần") == "amended"
+    assert map_status_vi("") == "active"
+
+
+def test_map_status_legacy():
+    assert map_status_legacy("In effect") == "active"
+    assert map_status_legacy("Expired") == "expired"
+    assert map_status_legacy("No longer applicable") == "expired"
+    assert map_status_legacy("Unknown") == "active"
+
+
+def test_normalize_doc_number():
+    assert normalize_doc_number("  115/nq-hđbcqg  ") == "115/NQ-HĐBCQG"
+    assert normalize_doc_number("01 / 2020 / TT") == "01 / 2020 / TT"
+    assert normalize_doc_number(None) == ""
+
+
+def test_parse_date_vi():
+    assert parse_date_vi("15/03/2020") == date(2020, 3, 15)
+    assert parse_date_vi("2020-03-15") == date(2020, 3, 15)
+    assert parse_date_vi("garbage") is None
+    assert parse_date_vi("") is None
+    assert parse_date_vi("31/02/2020") is None
+
+
+def test_count_articles():
+    from scripts._law_ingest import count_articles
+    assert count_articles("Điều 1. X\nĐIỀU 2. Y\nĐiều 3. Z") == 3
+    assert count_articles("không có điều khoản số") == 0
+    assert count_articles(None) == 0

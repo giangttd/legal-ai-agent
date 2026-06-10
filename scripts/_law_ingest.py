@@ -107,3 +107,91 @@ def detect_domains(title: str | None, content: str | None) -> list[str]:
     invalid = set(result) - VALID_DOMAINS
     assert not invalid, f"detect_domains produced non-enum values: {invalid}"
     return result
+
+
+_LAW_TYPE_VI = {
+    "quyết định": "quyet_dinh",
+    "nghị quyết": "nghi_quyet",
+    "nghị quyết liên tịch": "nghi_quyet",
+    "thông tư": "thong_tu",
+    "thông tư liên tịch": "thong_tu",
+    "thông tư liên bộ": "thong_tu",
+    "nghị định": "nghi_dinh",
+    "luật": "luat",
+    "bộ luật": "bo_luat",
+    "hiến pháp": "hien_phap",
+    "công văn": "cong_van",
+}
+
+_LAW_TYPE_LEGACY = {
+    "decision": "quyet_dinh",
+    "official dispatch": "cong_van",
+    "resolution": "nghi_quyet",
+    "circular": "thong_tu",
+    "joint circular": "thong_tu",
+    "decree of government": "nghi_dinh",
+    "law": "luat",
+    "constitution": "hien_phap",
+}
+
+_STATUS_VI = {
+    "còn hiệu lực": "active",
+    "hết hiệu lực toàn bộ": "expired",
+    "hết hiệu lực một phần": "amended",
+    "chưa có hiệu lực": "pending",
+    "không còn phù hợp": "expired",
+}
+
+_STATUS_LEGACY = {
+    "in effect": "active",
+    "expired": "expired",
+    "no longer applicable": "expired",
+}
+
+
+def map_law_type_vi(value: str | None) -> str:
+    return _LAW_TYPE_VI.get(str(value or "").strip().lower(), "other")
+
+
+def map_law_type_legacy(value: str | None) -> str:
+    return _LAW_TYPE_LEGACY.get(str(value or "").strip().lower(), "other")
+
+
+def map_status_vi(value: str | None) -> str:
+    return _STATUS_VI.get(str(value or "").strip().lower(), "active")
+
+
+def map_status_legacy(value: str | None) -> str:
+    return _STATUS_LEGACY.get(str(value or "").strip().lower(), "active")
+
+
+def normalize_doc_number(value: str | None) -> str:
+    """Dedup key: collapse internal whitespace, strip, uppercase."""
+    return re.sub(r"\s+", " ", str(value or "").strip()).upper()
+
+
+def parse_date_vi(value: str | None) -> date | None:
+    """Parse DD/MM/YYYY or YYYY-MM-DD; return None on anything else/invalid."""
+    s = str(value or "").strip()
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+    if m:
+        d, mo, y = (int(x) for x in m.groups())
+        try:
+            return date(y, mo, d)
+        except ValueError:
+            return None
+    m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", s)
+    if m:
+        y, mo, d = (int(x) for x in m.groups())
+        try:
+            return date(y, mo, d)
+        except ValueError:
+            return None
+    return None
+
+
+def count_articles(text: str | None) -> int:
+    """Count `Điều N` article headers — matches scripts/load_law_data.py:199.
+    Uses the anchored regex, NOT str.count('Điều '), so in-prose cross-references
+    don't inflate the count and ALL-CAPS `ĐIỀU` headers are still counted."""
+    return len(re.findall(r"(?:Điều|ĐIỀU)\s+\d+", str(text or "")))
