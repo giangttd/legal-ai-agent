@@ -400,7 +400,7 @@ def verify(conn, limit: int | None, skip_relations: bool) -> None:
         tsv_hits = cur.fetchone()[0]
         print(f"[verify] tsv 'lao động' hits: {tsv_hits}")
 
-        # End-to-end via the live search_law() (deployed in Phase 0).
+        # End-to-end via the live search_law() function.
         cur.execute("SELECT count(*) FROM search_law(%s, NULL, %s)",
                     ("hợp đồng lao động", 10))
         sl_hits = cur.fetchone()[0]
@@ -439,8 +439,8 @@ def main(argv: list[str] | None = None) -> int:
             load_legacy(conn, snap, seen, args.limit)
         if not args.skip_relations:
             load_relationships(conn, snap, id_map)
-        recreate_indexes(conn)          # Phase 4 step 1 (success path)
-        verify(conn, args.limit, args.skip_relations)  # Phase 4 step 3
+        recreate_indexes(conn)          # rebuild tsv GIN indexes on success
+        verify(conn, args.limit, args.skip_relations)  # post-load sanity checks
     except Exception:
         conn.rollback()  # clear any aborted-transaction state before re-raising
         raise
