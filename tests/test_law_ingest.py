@@ -43,3 +43,25 @@ def test_chunk_document_no_articles_falls_back():
     chunks = chunk_document(text)
     assert len(chunks) >= 1
     assert chunks[0]["article"] is None
+
+
+from scripts._law_ingest import VALID_DOMAINS, detect_domains
+
+
+def test_detect_domains_finds_labor():
+    out = detect_domains("Bộ luật Lao động", "quy định về người lao động và tiền lương")
+    assert "lao_dong" in out
+
+
+def test_detect_domains_defaults_to_other():
+    assert detect_domains("Tiêu đề trung tính", "nội dung không khớp") == ["other"]
+
+
+def test_detect_domains_only_valid_enum_values():
+    out = detect_domains("thuế thu nhập doanh nghiệp", "đất đai đầu tư bảo hiểm xã hội")
+    assert set(out) <= VALID_DOMAINS
+
+
+def test_valid_domains_has_twelve_labels():
+    assert len(VALID_DOMAINS) == 12
+    assert "hanh_chinh" not in VALID_DOMAINS  # the main.py bug must not leak in

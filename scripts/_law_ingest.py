@@ -72,3 +72,38 @@ def chunk_document(text: str, chunk_size: int = 1500, overlap: int = 200) -> lis
             chunks.append({"article": None, "clause": None,
                            "content": sub, "title": f"Phần {i + 1}"})
     return chunks
+
+
+# The 12 legal_domain enum labels (database/init.sql). NOTE: `hanh_chinh` is
+# intentionally absent — src/api/main.py:detect_domain emits it and it is NOT a
+# legal_domain member, so we must never reuse that function here (review #2).
+VALID_DOMAINS = frozenset({
+    "lao_dong", "doanh_nghiep", "dan_su", "thuong_mai", "thue", "dat_dai",
+    "dau_tu", "bhxh", "atvs_ld", "so_huu_tri_tue", "hinh_su", "other",
+})
+
+# Ported verbatim from the enum-safe scripts/load_law_data.py:detect_domains.
+_DOMAIN_KEYWORDS = {
+    "lao_dong": ["lao động", "người lao động", "người sử dụng lao động", "tiền lương", "hợp đồng lao động"],
+    "doanh_nghiep": ["doanh nghiệp", "công ty", "thành lập doanh nghiệp", "cổ phần", "trách nhiệm hữu hạn"],
+    "dan_su": ["dân sự", "quyền sở hữu", "thừa kế", "hợp đồng dân sự"],
+    "thuong_mai": ["thương mại", "mua bán hàng hóa", "xuất nhập khẩu"],
+    "thue": ["thuế", "thu nhập", "giá trị gia tăng", "thuế suất"],
+    "dat_dai": ["đất đai", "quyền sử dụng đất", "thu hồi đất", "bất động sản"],
+    "dau_tu": ["đầu tư", "vốn đầu tư", "nhà đầu tư", "dự án đầu tư"],
+    "bhxh": ["bảo hiểm xã hội", "bảo hiểm y tế", "bảo hiểm thất nghiệp", "hưu trí"],
+    "atvs_ld": ["an toàn", "vệ sinh lao động", "tai nạn lao động", "bệnh nghề nghiệp"],
+    "so_huu_tri_tue": ["sở hữu trí tuệ", "bản quyền", "sáng chế", "nhãn hiệu"],
+    "hinh_su": ["hình sự", "tội phạm", "hình phạt", "truy cứu"],
+}
+
+
+def detect_domains(title: str | None, content: str | None) -> list[str]:
+    """Keyword-detect legal domains from title + first 5000 chars of content.
+    Guarantees every returned value is a legal_domain enum member."""
+    text = (str(title or "") + " " + str(content or "")[:5000]).lower()
+    found = [d for d, kws in _DOMAIN_KEYWORDS.items() if any(k in text for k in kws)]
+    result = found or ["other"]
+    invalid = set(result) - VALID_DOMAINS
+    assert not invalid, f"detect_domains produced non-enum values: {invalid}"
+    return result
