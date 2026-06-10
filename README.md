@@ -351,10 +351,24 @@ cp .env.example .env
 # Run migrations
 python scripts/run_migration.py
 
-# Load Vietnamese law data (optional, ~40K documents)
-python scripts/load_law_data.py
-python scripts/index_chunks.py
+# Load Vietnamese law data from the bundled offline dataset (primary path)
+# Runs on the HOST against the docker-compose Postgres:
+export SUPABASE_DB_HOST=localhost
+export SUPABASE_DB_PORT=${DB_PORT:-5432}
+export DB_NAME=${POSTGRES_DB:-legalai}
+export DB_USER=${POSTGRES_USER:-legalai}
+export SUPABASE_DB_PASSWORD=${POSTGRES_PASSWORD:-legalai2026}
+export DB_SSL_MODE=disable
+python scripts/load_offline_dataset.py --truncate
 ```
+
+> The loader auto-reconciles the schema it needs (`pg_trgm`, `domains legal_domain[]`,
+> and the `search_law()` function from `scripts/migration_search_v5_fixed.sql`), then
+> loads the bundled HuggingFace dataset (`data/datasets-legal-docs/`) — both the
+> `current` (HTML, rich metadata) and `legacy` (broader coverage) configs, merged and
+> deduplicated. Use `--limit N --skip-relations` to validate on a subset first, or
+> `--skip-legacy` for a faster current-only corpus. The CrawlKit crawler remains
+> available for ad-hoc top-ups but is no longer required.
 
 ### 4. Run
 
