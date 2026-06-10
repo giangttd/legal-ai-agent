@@ -1890,7 +1890,7 @@ async def search_post(body: LawSearchBody, company: dict = Depends(verify_api_ke
             "law_title": r["law_title"],
             "law_number": r["law_number"],
             "article": r.get("article"),
-            "content": r["content"][:500],
+            "content": r["content"][:4000],  # full chunk for the UI detail view
             "rank": float(r.get("rank", 0)),
         } for r in results],
     }

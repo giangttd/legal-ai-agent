@@ -4333,22 +4333,52 @@ console.log(await resp.json());</code></pre>
                     window._searchQuery = query;
 
                     // Also open search results tab in center
+                    window._searchTotal = data.total || results.length;
                     openTabByType('search-results');
-                    const center = document.getElementById('searchResultsCenter');
-                    if (center) {
-                        center.innerHTML = `<div style="margin-bottom: 0.75rem; font-size: 0.8rem; color: var(--text-muted);">${data.total || results.length} kết quả cho "${escapeHtml(query)}"</div>` +
-                            results.map((r, idx) => {
-                                const snippet = r.content ? r.content.substring(0, 300) : '';
-                                return `<div class="result-card"><div class="result-header"><div class="result-title">${escapeHtml(r.law_title || 'Văn bản')}</div>${r.article_number ? `<div class="result-badge">${escapeHtml(r.article_number)}</div>` : ''}</div><div class="result-excerpt">${escapeHtml(snippet)}</div><div class="result-actions"><button class="btn btn-secondary btn-small" onclick="toggleSearchFull(this, ${idx})">📖 Xem đầy đủ</button><button class="btn btn-primary btn-small" onclick="askAiAboutResult('${escapeHtml(r.law_title || '').replace(/'/g, "\\'")}', '${escapeHtml(r.article_number || '').replace(/'/g, "\\'")}')">💬 Hỏi AI</button></div><div class="hidden" id="searchFull${idx}" style="margin-top: 0.5rem; padding: 0.75rem; background: var(--code-bg); border-radius: 6px; font-size: 0.8rem; line-height: 1.5; white-space: pre-wrap; max-height: 300px; overflow-y: auto;">${escapeHtml(r.content || '')}</div></div>`;
-                            }).join('');
-                    }
+                    renderSearchResultsCards();
                 } else { sidebar.innerHTML = '<div class="empty-state" style="padding: 1.5rem;"><div class="empty-state-text" style="font-size: 0.78rem;">Lỗi tìm kiếm</div></div>'; }
             } catch (e) { sidebar.innerHTML = '<div class="empty-state" style="padding: 1.5rem;"><div class="empty-state-text" style="font-size: 0.78rem;">Lỗi kết nối</div></div>'; }
         }
 
+        // Render the result list (cards) into the center pane. Used on a fresh
+        // search and as the "back" target from a detail view.
+        function renderSearchResultsCards() {
+            const center = document.getElementById('searchResultsCenter');
+            if (!center) return;
+            const results = window._searchResults || [];
+            const total = window._searchTotal || results.length;
+            const query = window._searchQuery || '';
+            center.innerHTML = `<div style="margin-bottom: 0.75rem; font-size: 0.8rem; color: var(--text-muted);">${total} kết quả cho "${escapeHtml(query)}"</div>` +
+                results.map((r, idx) => {
+                    const snippet = r.content ? r.content.substring(0, 300) : '';
+                    const article = r.article || r.article_number || '';
+                    return `<div class="result-card" onclick="openSearchResultInCenter(${idx})" style="cursor: pointer;"><div class="result-header"><div class="result-title">${escapeHtml(r.law_title || 'Văn bản')}</div>${article ? `<div class="result-badge">${escapeHtml(article)}</div>` : ''}</div><div class="result-excerpt">${escapeHtml(snippet)}</div></div>`;
+                }).join('');
+        }
+
+        // Show one result's full detail in the center pane. Activates the tab
+        // WITHOUT recreating its pane (createTabContentPane would reset it to the
+        // placeholder and wipe the content).
         function openSearchResultInCenter(idx) {
             if (!window._searchResults || !window._searchResults[idx]) return;
-            openTabByType('search-results');
+            const r = window._searchResults[idx];
+            if (document.getElementById('tab-search-results')) {
+                switchTab('search-results');
+            } else {
+                openTabByType('search-results');
+            }
+            const center = document.getElementById('searchResultsCenter');
+            if (!center) return;
+            const article = r.article || r.article_number || '';
+            center.innerHTML = `
+                <div style="margin-bottom: 0.75rem;"><button class="btn btn-secondary btn-small" onclick="renderSearchResultsCards()">← Quay lại danh sách</button></div>
+                <div class="result-card">
+                    <div class="result-title" style="font-size: 1rem; margin-bottom: 0.35rem;">${escapeHtml(r.law_title || 'Văn bản')}</div>
+                    ${r.law_number ? `<div style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.25rem;">Số hiệu: ${escapeHtml(r.law_number)}</div>` : ''}
+                    ${article ? `<div class="result-badge" style="display: inline-block; margin-bottom: 0.5rem;">${escapeHtml(article)}</div>` : ''}
+                    <div style="white-space: pre-wrap; font-size: 0.85rem; line-height: 1.6; margin-top: 0.5rem;">${escapeHtml(r.content || '(Không có nội dung)')}</div>
+                    <div style="margin-top: 0.85rem;"><button class="btn btn-primary btn-small" onclick="askAiAboutResult('${escapeHtml(r.law_title || '').replace(/'/g, "\\'")}', '${escapeHtml(article).replace(/'/g, "\\'")}')">💬 Hỏi AI</button></div>
+                </div>`;
         }
 
         function toggleSearchFull(btn, idx) {
