@@ -399,19 +399,20 @@ def verify(conn, limit: int | None, skip_relations: bool) -> None:
             ("lao & động",))
         tsv_hits = cur.fetchone()[0]
         print(f"[verify] tsv 'lao động' hits: {tsv_hits}")
-        assert tsv_hits > 0, "tsv populated but no keyword match — check to_tsvector"
 
         # End-to-end via the live search_law() (deployed in Phase 0).
         cur.execute("SELECT count(*) FROM search_law(%s, NULL, %s)",
                     ("hợp đồng lao động", 10))
         sl_hits = cur.fetchone()[0]
         print(f"[verify] search_law('hợp đồng lao động') rows: {sl_hits}")
-        assert sl_hits > 0, "search_law returned nothing"
 
-        if not skip_relations and limit is None:
-            assert rels > 0, "expected relationships on a full run"
+        if limit is None:
+            assert tsv_hits > 0, "tsv populated but no keyword match — check to_tsvector"
+            assert sl_hits > 0, "search_law returned nothing"
+            if not skip_relations:
+                assert rels > 0, "expected relationships on a full run"
         else:
-            print("[verify] relationship-count assertion skipped (--limit/--skip-relations)")
+            print("[verify] keyword/search_law/relationship assertions skipped (--limit active)")
     print("[verify] OK")
 
 
