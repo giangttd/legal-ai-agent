@@ -490,6 +490,13 @@ def test_parse_date_vi():
     assert parse_date_vi("garbage") is None
     assert parse_date_vi("") is None
     assert parse_date_vi("31/02/2020") is None
+
+
+def test_count_articles():
+    from scripts._law_ingest import count_articles
+    assert count_articles("Điều 1. X\nĐIỀU 2. Y\nĐiều 3. Z") == 3
+    assert count_articles("không có điều khoản số") == 0
+    assert count_articles(None) == 0
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -581,12 +588,19 @@ def parse_date_vi(value: str | None) -> date | None:
         except ValueError:
             return None
     return None
+
+
+def count_articles(text: str | None) -> int:
+    """Count `Điều N` article headers — matches scripts/load_law_data.py:199.
+    Uses the anchored regex, NOT str.count('Điều '), so in-prose cross-references
+    don't inflate the count and ALL-CAPS `ĐIỀU` headers are still counted."""
+    return len(re.findall(r"(?:Điều|ĐIỀU)\s+\d+", str(text or "")))
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_law_ingest.py -v`
-Expected: PASS (15 tests)
+Expected: PASS (16 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -616,13 +630,17 @@ from scripts.load_offline_dataset import build_db_config, resolve_snapshot
 
 
 def test_resolve_snapshot_picks_newest(tmp_path):
+    import time
+
     base = tmp_path / "data" / "datasets-legal-docs" / "snapshots"
     old = base / "aaa"
     new = base / "bbb"
     for d in (old, new):
         (d / "data").mkdir(parents=True)
         (d / "data" / "metadata.parquet").write_bytes(b"x")
-    os.utime(new, (10**9 + 100, 10**9 + 100))  # make `new` newer
+    now = time.time()
+    os.utime(old, (now - 1000, now - 1000))  # `old` clearly older
+    os.utime(new, (now + 1000, now + 1000))  # `new` clearly newer
     snap = resolve_snapshot(str(base.parent))
     assert snap.endswith("bbb")
 
@@ -801,13 +819,24 @@ def reconcile_schema(conn) -> None:
     print("[load] schema reconciled (pg_trgm, legal_domain[], search_law())")
 
 
-def truncate_and_drop_indexes(conn) -> None:
+def truncate_tables(conn) -> None:
+    """Empty the law_* tables. Run BEFORE reconcile_schema so the
+    `ALTER COLUMN domains TYPE legal_domain[] USING domains::legal_domain[]` runs
+    on empty tables and can never fail on a pre-existing non-enum value (review #2)."""
+    with conn.cursor() as cur:
+        cur.execute("TRUNCATE law_chunks, law_relations, law_documents")
+    conn.commit()
+    print("[load] truncated law_chunks, law_relations, law_documents")
+
+
+def drop_tsv_indexes(conn) -> None:
+    """Drop the tsv GIN indexes for bulk-insert speed. Called AFTER
+    reconcile_schema (which re-creates them via the search migration)."""
     with conn.cursor() as cur:
         for name in TSV_INDEXES:
             cur.execute(f"DROP INDEX IF EXISTS {name}")
-        cur.execute("TRUNCATE law_chunks, law_relations, law_documents")
     conn.commit()
-    print("[load] truncated law_* and dropped tsv GIN indexes")
+    print("[load] dropped tsv GIN indexes for bulk load")
 
 
 def recreate_indexes(conn) -> None:
@@ -835,23 +864,46 @@ def assert_empty_or_die(conn) -> None:
 Replace the body of `main()` after the two `print(...)` lines (remove the `raise SystemExit(...)` placeholder) with:
 
 ```python
-    conn = psycopg2.connect(**cfg)
+    conn = psycopg2.connect(**cfg)  # outside try: a connect failure must not enter finally
     try:
-        reconcile_schema(conn)
+        # Order matters (review #2): empty the tables BEFORE reconcile_schema's
+        # ALTER, so `USING domains::legal_domain[]` runs on empty tables and can
+        # never abort on a pre-existing non-enum value.
         if args.truncate:
-            truncate_and_drop_indexes(conn)
+            truncate_tables(conn)
         else:
             assert_empty_or_die(conn)
-        # Phases 1-3 wired in Tasks 9-11:
+        reconcile_schema(conn)   # ALTER domains, pg_trgm, deploy search_law() + indexes
+        drop_tsv_indexes(conn)   # drop the tsv GIN the migration just created, for bulk speed
+        # --- Phase 1 (Task 9): uncomment ---
         # id_map, seen = load_current(conn, snap, args.limit)
-        # if not args.skip_legacy: load_legacy(conn, snap, seen, args.limit)
-        # if not args.skip_relations: load_relationships(conn, snap, id_map)
+        # --- Phase 2 (Task 10): uncomment ---
+        # if not args.skip_legacy:
+        #     load_legacy(conn, snap, seen, args.limit)
+        # --- Phase 3 + finalize (Task 11): uncomment ---
+        # if not args.skip_relations:
+        #     load_relationships(conn, snap, id_map)
+        # recreate_indexes(conn)
+        # verify(conn, args.limit, args.skip_relations)
+    except Exception:
+        conn.rollback()  # clear any aborted-transaction state before re-raising
+        raise
     finally:
-        # Crash-safe (review #7): always rebuild the GIN indexes we dropped.
-        recreate_indexes(conn)
-        conn.close()
+        # Crash-safe (review #1, #7): rebuild the tsv GIN indexes even after a
+        # failure. rollback() first so this runs on a CLEAN transaction — a mid-load
+        # error otherwise leaves the txn aborted and CREATE INDEX would fail with
+        # "current transaction is aborted". Best-effort; never mask the real error.
+        try:
+            conn.rollback()
+            recreate_indexes(conn)
+        except Exception as cleanup_err:  # noqa: BLE001
+            print(f"[load] WARNING: index rebuild during cleanup failed: {cleanup_err}")
+        finally:
+            conn.close()
     return 0
 ```
+
+Note: `reconcile_schema` and the per-phase loaders each `commit()` their own work, so on success the `finally` `rollback()` is a no-op and the `recreate_indexes` call is idempotent (`CREATE INDEX IF NOT EXISTS`). On failure, `rollback()` clears the aborted state so the index rebuild succeeds.
 
 - [ ] **Step 3: Smoke-check imports (no DB needed)**
 
@@ -986,7 +1038,7 @@ def load_current(conn, snap: str, limit: int | None):
 
         id_map[int_id] = doc_uuid
         seen_numbers.add(ing.normalize_doc_number(law_number))
-        article_count = text.count("Điều ")
+        article_count = ing.count_articles(text)
         doc_rows.append((
             doc_uuid, title, law_number, law_type, issuer, signer,
             issued, effective, expiry, status, domains, text,
@@ -1013,13 +1065,18 @@ def load_current(conn, snap: str, limit: int | None):
 
 - [ ] **Step 3: Wire `load_current` into `main()`**
 
-In `main()`, replace the Phase 1 comment with:
+In `main()`, replace the two Phase 1 marker lines:
 
+```python
+        # --- Phase 1 (Task 9): uncomment ---
+        # id_map, seen = load_current(conn, snap, args.limit)
+```
+with the active call:
 ```python
         id_map, seen = load_current(conn, snap, args.limit)
 ```
 
-(Leave the Phases 2-3 comments for now.)
+(Leave the Phase 2 and Phase 3 marker lines for now.)
 
 - [ ] **Step 4: Smoke-check import**
 
@@ -1051,7 +1108,10 @@ def _group_legacy_content(content_path: str) -> dict[int, str]:
     texts = table.column("content").to_pylist()
     grouped: dict[int, list[str]] = {}
     for rid, txt in zip(ids, texts):
-        if rid is None:
+        # Mirror the digit guard from _group_content_by_id (review #5): legacy id
+        # is int64 today, but guard defensively so a stray non-numeric id can never
+        # crash int() and abort the whole load.
+        if rid is None or not str(rid).strip().lstrip("-").isdigit():
             continue
         frag = txt or ""
         bucket = grouped.setdefault(int(rid), [])
@@ -1105,7 +1165,7 @@ def load_legacy(conn, snap: str, seen_numbers: set[str], limit: int | None) -> N
             doc_uuid, title, law_number, law_type, issuer, signer,
             issued, effective, expiry, status, domains, text,
             "huggingface/th1nhng0-legacy", f"https://vbpl.vn/legacy/{int_id}",
-            text.count("Điều "), len(text.split()), title, text,
+            ing.count_articles(text), len(text.split()), title, text,
         ))
         for ch in ing.chunk_document(text):
             chunk_rows.append((
@@ -1125,8 +1185,14 @@ def load_legacy(conn, snap: str, seen_numbers: set[str], limit: int | None) -> N
 
 - [ ] **Step 2: Wire into `main()`**
 
-In `main()`, replace the Phase 2 comment with:
+In `main()`, replace the two Phase 2 marker lines:
 
+```python
+        # --- Phase 2 (Task 10): uncomment ---
+        # if not args.skip_legacy:
+        #     load_legacy(conn, snap, seen, args.limit)
+```
+with the active call:
 ```python
         if not args.skip_legacy:
             load_legacy(conn, snap, seen, args.limit)
@@ -1228,8 +1294,16 @@ def verify(conn, limit: int | None, skip_relations: bool) -> None:
 
 - [ ] **Step 2: Wire Phase 3 + verify into `main()`**
 
-In `main()`, replace the Phase 3 comment with the relationship load **plus** the success-path finalize (recreate indexes + verify). `verify()` must run on the success path, **not** in `finally` — its asserts would otherwise mask the real exception during a failed load. The `finally` block keeps only the crash-safe `recreate_indexes(conn)` as an idempotent safety net (`CREATE INDEX IF NOT EXISTS` makes the success-path call + the finally call harmless if both run).
+In `main()`, replace the four Phase 3 + finalize marker lines:
 
+```python
+        # --- Phase 3 + finalize (Task 11): uncomment ---
+        # if not args.skip_relations:
+        #     load_relationships(conn, snap, id_map)
+        # recreate_indexes(conn)
+        # verify(conn, args.limit, args.skip_relations)
+```
+with the active calls:
 ```python
         if not args.skip_relations:
             load_relationships(conn, snap, id_map)
@@ -1237,7 +1311,7 @@ In `main()`, replace the Phase 3 comment with the relationship load **plus** the
         verify(conn, args.limit, args.skip_relations)  # Phase 4 step 3
 ```
 
-Leave the `finally` block exactly as written in Task 8 (it still calls `recreate_indexes(conn)` then `conn.close()`). On success, indexes are recreated in the try block and the finally call is a no-op via `IF NOT EXISTS`; on crash, the finally call rebuilds them.
+`verify()` runs on the success path, **not** in `finally` — its asserts would otherwise mask the real exception during a failed load. Leave the `except`/`finally` block exactly as written in Task 8: on success the indexes are recreated here and the `finally` `recreate_indexes` is a no-op via `IF NOT EXISTS`; on crash the `except` rolls back and the `finally` (after its own `rollback()`) rebuilds the indexes on a clean transaction.
 
 - [ ] **Step 3: Smoke-check import**
 
