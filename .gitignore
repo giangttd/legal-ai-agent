@@ -41,3 +41,7 @@ htmlcov/
 # Test outputs
 test_output/
 uploads/
+
+# Offline legal dataset (400MB+ HuggingFace snapshot — never commit)
+data/datasets-legal-docs/
+data/*.json
