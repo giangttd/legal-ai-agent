@@ -13,8 +13,22 @@ from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
 
-# Encryption key for storing API keys
-ENCRYPTION_KEY = os.getenv("LLM_ENCRYPTION_KEY", Fernet.generate_key().decode())
+# Encryption key for storing per-tenant provider API keys at rest.
+ENCRYPTION_KEY = os.getenv("LLM_ENCRYPTION_KEY")
+if not ENCRYPTION_KEY:
+    # A per-process random key makes ALL previously-stored tenant keys
+    # undecryptable after a restart — fatal in production, warn in dev.
+    if os.getenv("ENV", "development") == "production":
+        raise ValueError(
+            "CRITICAL: LLM_ENCRYPTION_KEY must be set in production "
+            "(a stable Fernet key), else stored provider keys break on restart."
+        )
+    import warnings
+    warnings.warn(
+        "⚠️ LLM_ENCRYPTION_KEY unset — using an ephemeral key; stored provider "
+        "keys will NOT survive a restart. Set LLM_ENCRYPTION_KEY in .env."
+    )
+    ENCRYPTION_KEY = Fernet.generate_key().decode()
 cipher = Fernet(ENCRYPTION_KEY.encode() if isinstance(ENCRYPTION_KEY, str) else ENCRYPTION_KEY)
 
 def encrypt_key(api_key: str) -> str:

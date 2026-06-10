@@ -20,19 +20,36 @@ import time
 def validate_jwt_secret() -> str:
     """Validate JWT secret and reject weak defaults"""
     JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
-    
-    if not JWT_SECRET or "change-in-production" in JWT_SECRET or len(JWT_SECRET) < 32:
-        warnings.warn("⚠️ JWT_SECRET is weak or not set! Set SUPABASE_JWT_SECRET in .env")
-        
-        # In production, should raise error. For dev, generate random:
+
+    # Known shipped/default secrets that must NEVER sign tokens — a publicly known
+    # signing key allows trivial JWT forgery (auth bypass).
+    KNOWN_WEAK = {
+        "change-me-to-random-jwt-secret",
+        "change-me-to-random-string",
+        "change-in-production",
+    }
+    is_weak = (
+        not JWT_SECRET
+        or JWT_SECRET in KNOWN_WEAK
+        or "change-in-production" in JWT_SECRET
+        or len(JWT_SECRET) < 32
+    )
+
+    if is_weak:
+        # Fail closed in production — never accept a missing/weak/default secret.
         if os.getenv("ENV", "development") == "production":
-            raise ValueError("CRITICAL: Set a strong SUPABASE_JWT_SECRET in production!")
-        
-        # For development, warn but allow (don't break local dev)
-        if not JWT_SECRET:
-            JWT_SECRET = "dev-secret-key-" + os.urandom(16).hex()
-            warnings.warn(f"⚠️ Using temporary development JWT secret")
-    
+            raise ValueError(
+                "CRITICAL: SUPABASE_JWT_SECRET is missing/weak/default. "
+                "Set a strong (>=32 char, non-default) secret in production."
+            )
+        # Development: refuse the weak/known-default value too — return an ephemeral
+        # random secret so the publicly-known default can NEVER be used to sign.
+        warnings.warn(
+            "⚠️ SUPABASE_JWT_SECRET missing/weak/default — using an ephemeral dev "
+            "secret (tokens invalidate on restart). Set a strong secret in .env."
+        )
+        return "dev-ephemeral-" + os.urandom(24).hex()
+
     return JWT_SECRET
 
 

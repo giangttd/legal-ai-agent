@@ -1599,7 +1599,9 @@ async def search_detailed(
 
     start_time = _time.time()
 
-    domain_list = domains.split(",") if domains else None
+    # Drop any value that isn't a real legal_domain enum member — otherwise the
+    # ::legal_domain[] cast downstream raises and 500s (DoS via bad query param).
+    domain_list = [d for d in (domains.split(",") if domains else []) if d in _LEGAL_DOMAIN_VALUES] or None
 
     # Use cached_search for better results with caching
     results = cached_search(q, domain_list, min(limit, 50))
@@ -1839,7 +1841,9 @@ Hãy soạn thảo văn bản hoàn chỉnh."""
 @app.get("/v1/legal/search")
 async def search(q: str, domains: Optional[str] = None, limit: int = 10, company: dict = Depends(verify_api_key)):
     """Tìm kiếm luật - Law Search"""
-    domain_list = domains.split(",") if domains else None
+    # Drop any value that isn't a real legal_domain enum member — otherwise the
+    # ::legal_domain[] cast downstream raises and 500s (DoS via bad query param).
+    domain_list = [d for d in (domains.split(",") if domains else []) if d in _LEGAL_DOMAIN_VALUES] or None
     results = cached_search(q, domain_list, min(limit, 30))
     
     return {
