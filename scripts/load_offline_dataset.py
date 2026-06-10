@@ -264,6 +264,87 @@ def load_current(conn, snap: str, limit: int | None):
     return id_map, seen_numbers
 
 
+def _group_legacy_content(content_path: str) -> dict[int, str]:
+    table = pq.read_table(content_path, columns=["id", "content"])
+    ids = table.column("id").to_pylist()
+    texts = table.column("content").to_pylist()
+    grouped: dict[int, list[str]] = {}
+    for rid, txt in zip(ids, texts):
+        # Mirror the digit guard from _group_content_by_id (review #5): legacy id
+        # is int64 today, but guard defensively so a stray non-numeric id can never
+        # crash int() and abort the whole load.
+        if rid is None or not str(rid).strip().lstrip("-").isdigit():
+            continue
+        frag = txt or ""
+        bucket = grouped.setdefault(int(rid), [])
+        if frag and frag not in bucket:
+            bucket.append(frag)
+    return {k: "\n".join(v) for k, v in grouped.items()}
+
+
+def load_legacy(conn, snap: str, seen_numbers: set[str], limit: int | None) -> None:
+    """Load legacy docs whose official number is not already present."""
+    meta_path = os.path.join(snap, "legacy", "metadata.parquet")
+    content_path = os.path.join(snap, "legacy", "content.parquet")
+    if not os.path.isfile(meta_path):
+        print("[load] no legacy config found; skipping")
+        return
+
+    meta_by_id = {r["id"]: r for r in pq.read_table(meta_path).to_pylist()}
+    content_by_id = _group_legacy_content(content_path)
+    print(f"[load] legacy metadata={len(meta_by_id)} content={len(content_by_id)}")
+
+    doc_rows: list[tuple] = []
+    chunk_rows: list[tuple] = []
+    loaded = skipped_dup = 0
+    cur = conn.cursor()
+    for int_id, text in content_by_id.items():
+        if limit is not None and loaded >= limit:
+            break
+        if len(text) < MIN_CONTENT_CHARS:
+            continue
+        meta = meta_by_id.get(int_id)
+        if not meta:
+            continue
+        number = (meta.get("document_number") or "").strip()
+        norm = ing.normalize_doc_number(number)
+        if norm and norm in seen_numbers:
+            skipped_dup += 1
+            continue
+        seen_numbers.add(norm)
+        title = (meta.get("title") or "").strip() or f"VB-{int_id}"
+        law_number = number or f"LEGACY-{int_id}"
+        law_type = ing.map_law_type_legacy(meta.get("legal_type"))
+        issuer = (meta.get("issuing_authority") or "").strip() or "Chưa xác định"
+        signer = meta.get("signers")
+        issued = ing.parse_date_vi(meta.get("issuance_date"))
+        effective = ing.parse_date_vi(meta.get("effect_date"))
+        expiry = ing.parse_date_vi(meta.get("effectless_date"))
+        status = ing.map_status_legacy(meta.get("effect_status"))
+        domains = ing.detect_domains(title, text)
+        doc_uuid = str(uuid.uuid4())
+        doc_rows.append((
+            doc_uuid, title, law_number, law_type, issuer, signer,
+            issued, effective, expiry, status, domains, text,
+            "huggingface/th1nhng0-legacy", f"https://vbpl.vn/legacy/{int_id}",
+            ing.count_articles(text), len(text.split()), title, text,
+        ))
+        for ch in ing.chunk_document(text):
+            chunk_rows.append((
+                doc_uuid, ch["article"], ch["clause"], ch["title"],
+                ch["content"], domains, ch["content"],
+            ))
+        loaded += 1
+        if loaded % COMMIT_EVERY == 0:
+            _flush_docs(cur, doc_rows); _flush_chunks(cur, chunk_rows)
+            conn.commit(); doc_rows.clear(); chunk_rows.clear()
+            print(f"[load] legacy progress: {loaded} docs ({skipped_dup} dup-skipped)")
+
+    _flush_docs(cur, doc_rows); _flush_chunks(cur, chunk_rows)
+    conn.commit(); cur.close()
+    print(f"[load] legacy done: {loaded} docs ({skipped_dup} dup-skipped)")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     cfg = build_db_config()
@@ -283,9 +364,8 @@ def main(argv: list[str] | None = None) -> int:
         reconcile_schema(conn)   # ALTER domains, pg_trgm, deploy search_law() + indexes
         drop_tsv_indexes(conn)   # drop the tsv GIN the migration just created, for bulk speed
         id_map, seen = load_current(conn, snap, args.limit)
-        # --- Phase 2 (Task 10): uncomment ---
-        # if not args.skip_legacy:
-        #     load_legacy(conn, snap, seen, args.limit)
+        if not args.skip_legacy:
+            load_legacy(conn, snap, seen, args.limit)
         # --- Phase 3 + finalize (Task 11): uncomment ---
         # if not args.skip_relations:
         #     load_relationships(conn, snap, id_map)
