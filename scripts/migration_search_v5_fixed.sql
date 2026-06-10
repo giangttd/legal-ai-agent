@@ -33,8 +33,9 @@ DECLARE
         'sẽ', 'đang', 'vậy', 'rồi', 'cần', 'phải', 'tối', 'đa',
         'một', 'hai', 'ba', 'bốn', 'năm'
     ];
-    -- Vietnamese compound phrases to detect
-    compound_map TEXT[][];
+    -- Vietnamese compound phrases to detect (flat 1-D array — only the phrase is
+    -- used in the bonus below; a ragged TEXT[][] literal crashes at runtime).
+    compound_map TEXT[];
     phrase TEXT;
     tsquery_obj TSQUERY;
 BEGIN
@@ -42,15 +43,15 @@ BEGIN
     
     -- Define common legal phrases
     compound_map := ARRAY[
-        ARRAY['hợp đồng lao động', 'hop', 'dong', 'lao', 'dong'],
-        ARRAY['bảo hiểm xã hội', 'bao', 'hiem', 'xa', 'hoi'],
-        ARRAY['công ty cổ phần', 'cong', 'ty', 'co', 'phan'],
-        ARRAY['thuế thu nhập', 'thue', 'thu', 'nhap'],
-        ARRAY['người lao động', 'nguoi', 'lao', 'dong'],
-        ARRAY['sa thải', 'sa', 'thai'],
-        ARRAY['thành lập', 'thanh', 'lap'],
-        ARRAY['xác định thời hạn', 'xac', 'dinh', 'thoi', 'han'],
-        ARRAY['loại hợp đồng', 'loai', 'hop', 'dong']
+        'hợp đồng lao động',
+        'bảo hiểm xã hội',
+        'công ty cổ phần',
+        'thuế thu nhập',
+        'người lao động',
+        'sa thải',
+        'thành lập',
+        'xác định thời hạn',
+        'loại hợp đồng'
     ];
     
     -- Extract keywords
@@ -93,7 +94,7 @@ BEGIN
                 -- Exact phrase bonus (Vietnamese compound phrases)
                 (SELECT SUM(
                     CASE 
-                        WHEN lc.content ILIKE '%' || cm[1] || '%' THEN 25.0
+                        WHEN lc.content ILIKE '%' || cm || '%' THEN 25.0
                         ELSE 0.0
                     END
                 ) FROM unnest(compound_map) AS cm) 

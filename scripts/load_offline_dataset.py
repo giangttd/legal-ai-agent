@@ -154,12 +154,19 @@ _DOC_COLS = ("id", "title", "law_number", "law_type", "issuer", "signer",
              "domains", "full_text", "source_site", "source_url",
              "article_count", "word_count")
 
+# The `domains` placeholder is cast to legal_domain[] — psycopg2 renders a Python
+# list as ARRAY[...] (text[]), which Postgres will NOT implicitly coerce to the
+# legal_domain[] column type in an INSERT, so the cast is required (found at deploy).
+def _placeholder(col: str) -> str:
+    return "%s::legal_domain[]" if col == "domains" else "%s"
+
+
 # Trailing two %s (title, full_text) feed the tsv expression (review #6 coalesce).
-_DOC_TEMPLATE = ("(" + ",".join(["%s"] * len(_DOC_COLS)) +
+_DOC_TEMPLATE = ("(" + ",".join(_placeholder(c) for c in _DOC_COLS) +
                  ", to_tsvector('simple', coalesce(%s,'') || ' ' || coalesce(%s,'')))")
 
 _CHUNK_COLS = ("law_id", "article", "clause", "title", "content", "domains")
-_CHUNK_TEMPLATE = ("(" + ",".join(["%s"] * len(_CHUNK_COLS)) +
+_CHUNK_TEMPLATE = ("(" + ",".join(_placeholder(c) for c in _CHUNK_COLS) +
                    ", to_tsvector('simple', %s))")  # trailing %s = content
 
 
