@@ -886,6 +886,15 @@ async def execute_tool(tool_name: str, tool_input: dict, company_id: str) -> dic
         }
     elif tool_name == "crawl_legal_document":
         url = tool_input.get("url", "")
+        # SSRF guard: only allow the known Vietnamese legal sources (same allowlist
+        # as the /crawler routes). The URL here comes from LLM tool input.
+        from urllib.parse import urlparse
+        _allowed = {"thuvienphapluat.vn", "vbpl.vn", "congbao.chinhphu.vn"}
+        _h = (urlparse(url).hostname or "").lower()
+        if _h.startswith("www."):
+            _h = _h[4:]
+        if urlparse(url).scheme not in ("http", "https") or _h not in _allowed:
+            return {"error": "❌ URL không được phép. Chỉ crawl: " + ", ".join(sorted(_allowed))}
         crawlkit_key = os.getenv("CRAWLKIT_API_KEY")
         if not crawlkit_key:
             return {

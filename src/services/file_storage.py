@@ -7,8 +7,12 @@ import httpx
 import uuid
 from pathlib import Path
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://chiokotzjtjwfodryfdt.supabase.co")
+# No hardcoded default — a real project ref must never be baked in (would route
+# uploads to someone else's Supabase project if SUPABASE_URL is unset).
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+# Only use Supabase Storage when BOTH are configured; otherwise fall back to local.
+_SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_KEY)
 BUCKET = "documents"
 LOCAL_UPLOAD_DIR = Path("/tmp/legal-ai-agent-uploads/documents")
 
@@ -43,7 +47,7 @@ async def upload_file(file_bytes: bytes, company_id: str, filename: str) -> dict
     unique_name = f"{company_id}/{uuid.uuid4()}_{filename}"
     ct = _content_type(filename)
 
-    if SUPABASE_SERVICE_KEY:
+    if _SUPABASE_ENABLED:
         # Upload to Supabase Storage
         url = f"{SUPABASE_URL}/storage/v1/object/{BUCKET}/{unique_name}"
         try:

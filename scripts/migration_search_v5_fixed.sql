@@ -33,8 +33,9 @@ DECLARE
         'sẽ', 'đang', 'vậy', 'rồi', 'cần', 'phải', 'tối', 'đa',
         'một', 'hai', 'ba', 'bốn', 'năm'
     ];
-    -- Vietnamese compound phrases to detect
-    compound_map TEXT[][];
+    -- Vietnamese compound phrases to detect (flat 1-D array — only the phrase is
+    -- used in the bonus below; a ragged TEXT[][] literal crashes at runtime).
+    compound_map TEXT[];
     phrase TEXT;
     tsquery_obj TSQUERY;
 BEGIN
@@ -42,15 +43,15 @@ BEGIN
     
     -- Define common legal phrases
     compound_map := ARRAY[
-        ARRAY['hợp đồng lao động', 'hop', 'dong', 'lao', 'dong'],
-        ARRAY['bảo hiểm xã hội', 'bao', 'hiem', 'xa', 'hoi'],
-        ARRAY['công ty cổ phần', 'cong', 'ty', 'co', 'phan'],
-        ARRAY['thuế thu nhập', 'thue', 'thu', 'nhap'],
-        ARRAY['người lao động', 'nguoi', 'lao', 'dong'],
-        ARRAY['sa thải', 'sa', 'thai'],
-        ARRAY['thành lập', 'thanh', 'lap'],
-        ARRAY['xác định thời hạn', 'xac', 'dinh', 'thoi', 'han'],
-        ARRAY['loại hợp đồng', 'loai', 'hop', 'dong']
+        'hợp đồng lao động',
+        'bảo hiểm xã hội',
+        'công ty cổ phần',
+        'thuế thu nhập',
+        'người lao động',
+        'sa thải',
+        'thành lập',
+        'xác định thời hạn',
+        'loại hợp đồng'
     ];
     
     -- Extract keywords
@@ -77,8 +78,29 @@ BEGIN
         )
     );
     
+    -- PERF: the GIN tsv index finds matches fast, but a common term (e.g.
+    -- "lao động") matches 100K+ chunks. Scoring every match with the per-row
+    -- compound_map / keyword ILIKE subqueries is O(matches × phrases) and took
+    -- ~78s. Two-stage instead: (1) take the top tsv-ranked candidates (bounded),
+    -- (2) run the expensive scoring only on those.
+    -- Stage 1: rank candidates on a NARROW projection (id + ts_rank only). Fetching
+    -- the wide `content` column for all 100K+ matches was the bottleneck; selecting
+    -- only id+rank here keeps the sort cheap (~0.8s), then we join back for content
+    -- on just the top candidates.
     RETURN QUERY
-    SELECT 
+    -- MATERIALIZED: force the candidate set to be computed + bounded FIRST.
+    -- Without it PG inlines the CTE and re-plans the expensive scoring over the
+    -- full match set, defeating the two-stage limit (stayed at ~11s).
+    WITH candidates AS MATERIALIZED (
+        SELECT lc.id, ts_rank(lc.tsv, tsquery_obj, 1) AS ts_r
+        FROM law_chunks lc
+        WHERE lc.tsv @@ tsquery_obj
+          AND (filter_domains IS NULL OR lc.domains && filter_domains)
+        ORDER BY ts_r DESC
+        LIMIT GREATEST(match_count * 5, 100)
+    )
+    -- Stage 2: expensive scoring runs only on the ≤ match_count*5 candidates.
+    SELECT
         lc.id AS chunk_id,
         lc.law_id,
         ld.title AS law_title,
@@ -87,23 +109,16 @@ BEGIN
         lc.title AS chunk_title,
         lc.content,
         lc.domains,
-        -- Comprehensive scoring (ensure no NULLs)
         (
             COALESCE(
-                -- Exact phrase bonus (Vietnamese compound phrases)
                 (SELECT SUM(
-                    CASE 
-                        WHEN lc.content ILIKE '%' || cm[1] || '%' THEN 25.0
-                        ELSE 0.0
-                    END
-                ) FROM unnest(compound_map) AS cm) 
+                    CASE WHEN lc.content ILIKE '%' || cm || '%' THEN 25.0 ELSE 0.0 END
+                ) FROM unnest(compound_map) AS cm)
                 , 0.0)
             +
-            -- Full-text search rank
-            COALESCE(ts_rank(lc.tsv, tsquery_obj, 1) * 15.0, 0.0)
+            COALESCE(c.ts_r * 15.0, 0.0)
             +
-            -- Law title domain match (boost relevant law types)
-            (CASE 
+            (CASE
                 WHEN normalized_query LIKE '%lao động%' AND ld.title ILIKE '%lao động%' THEN 8.0
                 WHEN normalized_query LIKE '%doanh nghiệp%' AND ld.title ILIKE '%doanh nghiệp%' THEN 8.0
                 WHEN normalized_query LIKE '%công ty%' AND ld.title ILIKE '%doanh nghiệp%' THEN 8.0
@@ -112,31 +127,26 @@ BEGIN
                 ELSE 0.0
             END)
             +
-            -- Article query bonus
-            (CASE 
+            (CASE
                 WHEN normalized_query LIKE '%điều%' AND lc.article IS NOT NULL THEN 2.0
                 ELSE 0.0
             END)
             +
-            -- Keyword density in content
-            ((SELECT COUNT(*)::FLOAT 
-              FROM unnest(key_words) kw 
+            ((SELECT COUNT(*)::FLOAT
+              FROM unnest(key_words) kw
               WHERE lc.content ILIKE '%' || kw || '%') / GREATEST(array_length(key_words, 1), 1)::FLOAT) * 5.0
-        ) 
-        * 
-        -- Length normalization (prefer concise, relevant chunks)
-        (CASE 
+        )
+        *
+        (CASE
             WHEN length(lc.content) < 100 THEN 0.6
             WHEN length(lc.content) BETWEEN 100 AND 800 THEN 1.0
             WHEN length(lc.content) BETWEEN 800 AND 2000 THEN 0.9
             ELSE 0.7
         END)
         AS rank
-    FROM law_chunks lc
+    FROM candidates c
+    INNER JOIN law_chunks lc ON lc.id = c.id
     INNER JOIN law_documents ld ON ld.id = lc.law_id
-    WHERE 
-        (filter_domains IS NULL OR lc.domains && filter_domains)
-        AND lc.tsv @@ tsquery_obj
     ORDER BY rank DESC NULLS LAST, length(lc.content) ASC
     LIMIT match_count;
 END;

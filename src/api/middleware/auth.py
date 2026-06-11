@@ -70,7 +70,9 @@ def verify_token(token: str, token_type: str = "access") -> Dict:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired"
         )
-    except jwt.JWTError:
+    except jwt.InvalidTokenError:
+        # PyJWT base for bad signature/format/claims (jwt.JWTError does not exist
+        # in PyJWT — that was python-jose; tampered tokens would 500, not 401).
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials"

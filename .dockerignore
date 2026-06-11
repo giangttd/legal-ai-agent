@@ -1,0 +1,9 @@
+# Keep the offline dataset out of the app image (loader runs on host)
+data/datasets-legal-docs/
+data/*.json
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+tests/

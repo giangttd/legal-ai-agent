@@ -34,15 +34,16 @@ services:
       DB_NAME: ${POSTGRES_DB:-legalai}
       DB_USER: ${POSTGRES_USER:-legalai}
       DB_SSL_MODE: disable
-      # Auth
-      SECRET_KEY: ${SECRET_KEY:-change-me-to-random-string}
-      SUPABASE_JWT_SECRET: ${JWT_SECRET:-change-me-to-random-jwt-secret}
+      # Auth — REQUIRED (no weak defaults; compose fails fast if unset). Generate:
+      #   SECRET_KEY=$(openssl rand -hex 32)  JWT_SECRET=$(openssl rand -hex 32)
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+      SUPABASE_JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
       # AI - At least one required
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      # Supabase Storage for permanent file persistence
-      SUPABASE_URL: ${SUPABASE_URL:-https://chiokotzjtjwfodryfdt.supabase.co}
+      # Supabase Storage (optional) — no hardcoded project default; blank = local storage
+      SUPABASE_URL: ${SUPABASE_URL:-}
       SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY:-}
     volumes:
       - uploads:/app/uploads

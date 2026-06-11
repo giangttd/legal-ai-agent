@@ -780,10 +780,13 @@ def multi_query_search(question: str, domains: Optional[List[str]] = None, limit
                 SELECT lc.id as chunk_id, lc.law_id, ld.title as law_title, 
                        ld.law_number, lc.article, lc.title as chunk_title,
                        lc.content, lc.domains, 1.0::float as rank
-                FROM law_chunks lc
+                FROM (
+                    SELECT * FROM law_chunks lc
+                    WHERE lc.content ILIKE %s {domain_filter}
+                    LIMIT 800
+                ) lc
                 JOIN law_documents ld ON ld.id = lc.law_id
-                WHERE lc.content ILIKE %s {domain_filter}
-                ORDER BY 
+                ORDER BY
                     CASE WHEN ld.title LIKE 'Bo Luat%%' OR ld.title LIKE 'Bộ luật%%' THEN 0
                          WHEN ld.title LIKE 'Luat %%' OR ld.title LIKE 'Luật %%' THEN 1
                          WHEN ld.title LIKE 'Nghi dinh%%' OR ld.title LIKE 'Nghị định%%' THEN 2
@@ -820,10 +823,13 @@ def multi_query_search(question: str, domains: Optional[List[str]] = None, limit
                     SELECT lc.id as chunk_id, lc.law_id, ld.title as law_title, 
                            ld.law_number, lc.article, lc.title as chunk_title,
                            lc.content, lc.domains, 1.2::float as rank
-                    FROM law_chunks lc
+                    FROM (
+                        SELECT * FROM law_chunks lc
+                        WHERE lc.content ILIKE %s {domain_filter}
+                        LIMIT 800
+                    ) lc
                     JOIN law_documents ld ON ld.id = lc.law_id
-                    WHERE lc.content ILIKE %s {domain_filter}
-                    ORDER BY 
+                    ORDER BY
                         CASE WHEN ld.title LIKE 'Bo Luat%%' OR ld.title LIKE 'Bộ luật%%' THEN 0
                              WHEN ld.title LIKE 'Luat %%' OR ld.title LIKE 'Luật %%' THEN 1
                              WHEN ld.title LIKE 'Nghi dinh%%' OR ld.title LIKE 'Nghị định%%' THEN 2
@@ -849,9 +855,12 @@ def multi_query_search(question: str, domains: Optional[List[str]] = None, limit
                     SELECT lc.id as chunk_id, lc.law_id, ld.title as law_title, 
                            ld.law_number, lc.article, lc.title as chunk_title,
                            lc.content, lc.domains, 1.0::float as rank
-                    FROM law_chunks lc
+                    FROM (
+                        SELECT * FROM law_chunks lc
+                        WHERE lc.content ILIKE %s {domain_filter}
+                        LIMIT 800
+                    ) lc
                     JOIN law_documents ld ON ld.id = lc.law_id
-                    WHERE lc.content ILIKE %s {domain_filter}
                     ORDER BY CASE WHEN ld.title LIKE 'Bo Luat%%' THEN 0 WHEN ld.title LIKE 'Luat%%' THEN 1 ELSE 2 END
                     LIMIT {limit}
                 """, params)
@@ -1590,7 +1599,9 @@ async def search_detailed(
 
     start_time = _time.time()
 
-    domain_list = domains.split(",") if domains else None
+    # Drop any value that isn't a real legal_domain enum member — otherwise the
+    # ::legal_domain[] cast downstream raises and 500s (DoS via bad query param).
+    domain_list = [d for d in (domains.split(",") if domains else []) if d in _LEGAL_DOMAIN_VALUES] or None
 
     # Use cached_search for better results with caching
     results = cached_search(q, domain_list, min(limit, 50))
@@ -1830,7 +1841,9 @@ Hãy soạn thảo văn bản hoàn chỉnh."""
 @app.get("/v1/legal/search")
 async def search(q: str, domains: Optional[str] = None, limit: int = 10, company: dict = Depends(verify_api_key)):
     """Tìm kiếm luật - Law Search"""
-    domain_list = domains.split(",") if domains else None
+    # Drop any value that isn't a real legal_domain enum member — otherwise the
+    # ::legal_domain[] cast downstream raises and 500s (DoS via bad query param).
+    domain_list = [d for d in (domains.split(",") if domains else []) if d in _LEGAL_DOMAIN_VALUES] or None
     results = cached_search(q, domain_list, min(limit, 30))
     
     return {
@@ -1843,6 +1856,47 @@ async def search(q: str, domains: Optional[str] = None, limit: int = 10, company
             "content": r["content"][:500],
             "rank": float(r.get("rank", 0))
         } for r in results]
+    }
+
+
+# Valid legal_domain enum members (database/init.sql). The web UI's filter pills
+# send law_type values (luat/nghi_dinh/thong_tu), which are NOT legal_domain and
+# would error on the ::legal_domain[] cast — drop any non-domain filter value.
+_LEGAL_DOMAIN_VALUES = frozenset({
+    "lao_dong", "doanh_nghiep", "dan_su", "thuong_mai", "thue", "dat_dai",
+    "dau_tu", "bhxh", "atvs_ld", "so_huu_tri_tue", "hinh_su", "hanh_chinh", "other",
+})
+
+
+class LawSearchBody(BaseModel):
+    query: str
+    domain: Optional[str] = None
+    domains: Optional[List[str]] = None
+    limit: int = 20
+
+
+@app.post("/v1/legal/search")
+async def search_post(body: LawSearchBody, company: dict = Depends(verify_api_key)):
+    """Law search (POST) — used by the web UI. Mirrors GET /v1/legal/search.
+
+    The UI sends `Authorization: Bearer <token>` + a JSON body `{query, domain?, limit}`;
+    the GET variant only accepted query params, so the UI's POST got 405.
+    """
+    raw = body.domains or ([body.domain] if body.domain else [])
+    # keep only valid legal_domain filter values; ignore law-type filter pills.
+    domain_list = [d for d in raw if d in _LEGAL_DOMAIN_VALUES] or None
+    results = cached_search(body.query, domain_list, min(body.limit, 30))
+    return {
+        "query": body.query,
+        "count": len(results),
+        "total": len(results),
+        "results": [{
+            "law_title": r["law_title"],
+            "law_number": r["law_number"],
+            "article": r.get("article"),
+            "content": r["content"][:4000],  # full chunk for the UI detail view
+            "rank": float(r.get("rank", 0)),
+        } for r in results],
     }
 
 # ============================================

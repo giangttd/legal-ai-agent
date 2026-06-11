@@ -13,8 +13,22 @@ from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
 
-# Encryption key for storing API keys
-ENCRYPTION_KEY = os.getenv("LLM_ENCRYPTION_KEY", Fernet.generate_key().decode())
+# Encryption key for storing per-tenant provider API keys at rest.
+ENCRYPTION_KEY = os.getenv("LLM_ENCRYPTION_KEY")
+if not ENCRYPTION_KEY:
+    # A per-process random key makes ALL previously-stored tenant keys
+    # undecryptable after a restart — fatal in production, warn in dev.
+    if os.getenv("ENV", "development") == "production":
+        raise ValueError(
+            "CRITICAL: LLM_ENCRYPTION_KEY must be set in production "
+            "(a stable Fernet key), else stored provider keys break on restart."
+        )
+    import warnings
+    warnings.warn(
+        "⚠️ LLM_ENCRYPTION_KEY unset — using an ephemeral key; stored provider "
+        "keys will NOT survive a restart. Set LLM_ENCRYPTION_KEY in .env."
+    )
+    ENCRYPTION_KEY = Fernet.generate_key().decode()
 cipher = Fernet(ENCRYPTION_KEY.encode() if isinstance(ENCRYPTION_KEY, str) else ENCRYPTION_KEY)
 
 def encrypt_key(api_key: str) -> str:
@@ -159,15 +173,18 @@ class AnthropicProvider(LLMProvider):
 class OpenAIProvider(LLMProvider):
     """OpenAI GPT provider."""
     
+    # Current OpenAI API models (developers.openai.com/api/docs/models, 2026).
     MODELS = [
+        {"id": "gpt-5.5", "name": "GPT-5.5", "context": 1000000},
+        {"id": "gpt-5.4", "name": "GPT-5.4", "context": 1000000},
+        {"id": "gpt-5.4-mini", "name": "GPT-5.4 Mini", "context": 400000},
+        {"id": "gpt-4.1", "name": "GPT-4.1", "context": 1000000},
+        {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "context": 1000000},
         {"id": "gpt-4o", "name": "GPT-4o", "context": 128000},
         {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "context": 128000},
-        {"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "context": 128000},
-        {"id": "o1", "name": "O1", "context": 200000},
-        {"id": "o1-mini", "name": "O1 Mini", "context": 128000},
     ]
-    
-    def __init__(self, api_key: str, model: str = "gpt-4o", base_url: str = None):
+
+    def __init__(self, api_key: str, model: str = "gpt-5.5", base_url: str = None):
         from openai import OpenAI
         kwargs = {"api_key": api_key}
         if base_url:
@@ -409,7 +426,7 @@ PROVIDERS = {
         "name": "OpenAI",
         "class": OpenAIProvider,
         "auth_methods": ["api_key", "oauth"],
-        "default_model": "gpt-4o",
+        "default_model": "gpt-5.5",
         "website": "https://platform.openai.com",
         "oauth": {
             "enabled": True,

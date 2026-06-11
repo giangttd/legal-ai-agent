@@ -8,6 +8,7 @@
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "vector";
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- ============================================================
 -- CUSTOM TYPES (ENUMs)
@@ -18,7 +19,7 @@ CREATE TYPE doc_status AS ENUM ('uploaded', 'processing', 'analyzed', 'error');
 CREATE TYPE doc_type AS ENUM ('hop_dong_lao_dong', 'hop_dong_thuong_mai', 'hop_dong_dich_vu', 'noi_quy', 'quy_che', 'quyet_dinh', 'cong_van', 'bien_ban', 'bao_cao', 'phu_luc', 'other');
 CREATE TYPE law_status AS ENUM ('active', 'expired', 'amended', 'repealed', 'pending');
 CREATE TYPE law_type AS ENUM ('hien_phap', 'bo_luat', 'luat', 'nghi_dinh', 'thong_tu', 'quyet_dinh', 'nghi_quyet', 'cong_van', 'other');
-CREATE TYPE legal_domain AS ENUM ('lao_dong', 'doanh_nghiep', 'dan_su', 'thuong_mai', 'thue', 'dat_dai', 'dau_tu', 'bhxh', 'atvs_ld', 'so_huu_tri_tue', 'hinh_su', 'other');
+CREATE TYPE legal_domain AS ENUM ('lao_dong', 'doanh_nghiep', 'dan_su', 'thuong_mai', 'thue', 'dat_dai', 'dau_tu', 'bhxh', 'atvs_ld', 'so_huu_tri_tue', 'hinh_su', 'hanh_chinh', 'other');
 CREATE TYPE message_role AS ENUM ('user', 'assistant', 'system');
 CREATE TYPE plan_type AS ENUM ('trial', 'starter', 'pro', 'enterprise');
 CREATE TYPE user_role AS ENUM ('owner', 'admin', 'member', 'viewer', 'superadmin');
@@ -280,7 +281,7 @@ CREATE TABLE IF NOT EXISTS law_chunks (
     content TEXT NOT NULL,
     parent_context TEXT,
     embedding vector,
-    domains TEXT[],
+    domains legal_domain[],
     keywords TEXT[],
     created_at TIMESTAMPTZ DEFAULT now(),
     tsv TSVECTOR,
@@ -299,7 +300,7 @@ CREATE TABLE IF NOT EXISTS law_documents (
     effective_date DATE,
     expiry_date DATE,
     status law_status DEFAULT 'active'::law_status,
-    domains TEXT[] NOT NULL,
+    domains legal_domain[] NOT NULL,
     replaces TEXT[],
     amended_by TEXT[],
     full_text TEXT,
